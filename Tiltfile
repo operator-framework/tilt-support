@@ -41,9 +41,9 @@ CGO_ENABLED=0 GOOS=linux go build {gcflags} -o .tiltbuild/bin/{binary} ./cmd/{bi
         deps=['api', 'cmd/{}'.format(binary), 'internal', 'pkg', 'go.mod', 'go.sum']
     )
 
-    entrypoint = '/{}'.format(binary)
+    entrypoint = ['/{}'.format(binary)]
     if debug:
-        entrypoint = '/dlv --accept-multiclient --api-version=2 --headless=true --listen :30000 exec --continue -- ' + entrypoint
+        entrypoint = ['/dlv', '--accept-multiclient', '--api-version=2', '--headless=true', '--listen', ':30000', 'exec', '--continue', '--'] + entrypoint
 
     # Configure our image build. If the file in live_update.sync (.tiltbuild/bin/$binary) changes, Tilt
     # copies it to the running container and restarts it.
