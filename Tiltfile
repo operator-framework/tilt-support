@@ -17,8 +17,9 @@ docker_build(
     build_args={'GO_VERSION': '1.20'},
     dockerfile_contents='''
 ARG GO_VERSION
-FROM golang:$GO_VERSION
-RUN CGO_ENABLED=0 go install github.com/go-delve/delve/cmd/dlv@v$GO_VERSION
+FROM golang:${GO_VERSION}
+ARG GO_VERSION
+RUN CGO_ENABLED=0 go install github.com/go-delve/delve/cmd/dlv@v${GO_VERSION}
 '''
 )
 
