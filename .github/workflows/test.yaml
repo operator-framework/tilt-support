@@ -1,5 +1,8 @@
 on:
   pull_request:
+    paths:
+    - Tiltfile
+    - .github/workflows/test.yaml
   merge_group:
 
 jobs:
