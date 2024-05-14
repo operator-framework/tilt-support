@@ -14,7 +14,7 @@ def deploy_cert_manager_if_needed():
 docker_build(
     ref='helper',
     context='.',
-    build_args={'GO_VERSION': '1.21'},
+    build_args={'GO_VERSION': '1.22'},
     dockerfile_contents='''
 ARG GO_VERSION
 FROM golang:${GO_VERSION}
