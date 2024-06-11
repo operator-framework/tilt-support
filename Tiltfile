@@ -120,7 +120,7 @@ def process_yaml(yaml):
             c['image'] = '{}:{}'.format(image_without_tag, command)
 
     # Now apply all the yaml
-    k8s_yaml(encode_yaml_stream(objects))
+    k8s_yaml(encode_yaml_stream(objects), allow_duplicates=True)
 
 
 # data format:
