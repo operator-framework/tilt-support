@@ -120,7 +120,11 @@ def process_yaml(yaml):
             c['image'] = '{}:{}'.format(image_without_tag, command)
 
     # Now apply all the yaml
-    k8s_yaml(encode_yaml_stream(objects))
+    # We are using allow_duplicates=True here as both
+    # operator-controller and catalogd will be installed in the same
+    # namespace "olmv1-system" as of https://github.com/operator-framework/operator-controller/pull/888
+    # and https://github.com/operator-framework/catalogd/pull/283
+    k8s_yaml(encode_yaml_stream(objects), allow_duplicates=True)
 
 
 # data format:
