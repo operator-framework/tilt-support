@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 go install github.com/go-delve/delve/cmd/dlv@v${GO_VERSION}
 )
 
 
-def build_binary(repo, binary, image, debug=True):
+def build_binary(repo, binary, image, tags="", debug=True):
     gcflags = ''
     if debug:
         gcflags = "-gcflags 'all=-N -l'"
@@ -36,8 +36,8 @@ def build_binary(repo, binary, image, debug=True):
         cmd='''
 cd ../{repo}
 mkdir -p .tiltbuild/bin
-CGO_ENABLED=0 GOOS=linux go build {gcflags} -o .tiltbuild/bin/{binary} ./cmd/{binary}
-'''.format(repo=repo, binary=binary, gcflags=gcflags),
+CGO_ENABLED=0 GOOS=linux go build {tags} {gcflags} -o .tiltbuild/bin/{binary} ./cmd/{binary}
+'''.format(repo=repo, binary=binary, gcflags=gcflags, tags=tags),
         deps=['api', 'cmd/{}'.format(binary), 'internal', 'pkg', 'go.mod', 'go.sum']
     )
 
@@ -138,13 +138,13 @@ def process_yaml(yaml):
 #         'webhooks': 'rukpak-webhooks',
 #     },
 # },
-def deploy_repo(repo, data):
+def deploy_repo(repo, data, tags="", debug=True):
     print('Deploying repo {}'.format(repo))
     deploy_cert_manager_if_needed()
 
     local_port = data['starting_debug_port']
     for binary, deployment in data['binaries'].items():
-        build_binary(repo, binary, data['image'])
+        build_binary(repo, binary, data['image'], tags, debug)
         k8s_resource(deployment, port_forwards=['{}:30000'.format(local_port)])
         local_port += 1
     process_yaml(kustomize('../{}/{}'.format(repo, data['yaml'])))
