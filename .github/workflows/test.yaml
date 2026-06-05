@@ -14,16 +14,8 @@ jobs:
         path: tilt-support
     - uses: actions/checkout@v3
       with:
-        repository: operator-framework/catalogd
-        path: catalogd
-    - uses: actions/checkout@v3
-      with:
         repository: operator-framework/operator-controller
         path: operator-controller
-    - uses: actions/checkout@v3
-      with:
-        repository: operator-framework/rukpak
-        path: rukpak
     - name: Install Tilt
       run: |
         TILT_VERSION="0.33.3"

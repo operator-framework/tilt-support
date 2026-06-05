@@ -5,7 +5,7 @@ load('ext://cert_manager', 'deploy_cert_manager')
 def deploy_cert_manager_if_needed():
     cert_manager_var = '__CERT_MANAGER__'
     if os.getenv(cert_manager_var) != '1':
-        deploy_cert_manager(version="v1.15.3")
+        deploy_cert_manager(version="v1.18.2")
         os.putenv(cert_manager_var, '1')
 
 
@@ -14,7 +14,7 @@ def deploy_cert_manager_if_needed():
 docker_build(
     ref='helper',
     context='.',
-    build_args={'GO_VERSION': '1.23'},
+    build_args={'GO_VERSION': '1.26.3'},
     dockerfile_contents='''
 ARG GO_VERSION
 FROM golang:${GO_VERSION}
@@ -24,49 +24,53 @@ RUN CGO_ENABLED=0 go install github.com/go-delve/delve/cmd/dlv@v${GO_VERSION}
 )
 
 
-def build_binary(repo, binary, image, tags="", debug=True):
+def build_binary(repo_root, repo, binary, deps, image, tags="", debug=True):
     gcflags = ''
     if debug:
         gcflags = "-gcflags 'all=-N -l'"
 
+    binary_name = binary.split("/")[-1]
+    prefixed_deps = ['../{}/{}'.format(repo_root, d) for d in deps]
+
     # Treat the main binary as a local resource, so we can automatically rebuild it when any of the deps change. This
     # builds it locally, targeting linux, so it can run in a linux container.
     local_resource(
-        '{}_{}_binary'.format(repo, binary),
+        '{}_{}_binary'.format(repo, binary_name),
         cmd='''
-cd ../{repo}
+cd ../{repo_root}
 mkdir -p .tiltbuild/bin
-CGO_ENABLED=0 GOOS=linux go build {tags} {gcflags} -o .tiltbuild/bin/{binary} ./cmd/{binary}
-'''.format(repo=repo, binary=binary, gcflags=gcflags, tags=tags),
-        deps=['api', 'cmd/{}'.format(binary), 'internal', 'pkg', 'go.mod', 'go.sum']
+CGO_ENABLED=0 GOOS=linux go build {tags} {gcflags} -o .tiltbuild/bin/{binary_name} {binary}
+'''.format(repo_root=repo_root, binary_name=binary_name, binary=binary, gcflags=gcflags, tags=tags),
+        deps=prefixed_deps
     )
 
-    entrypoint = ['/{}'.format(binary)]
+    entrypoint = ['/{}'.format(binary_name)]
     if debug:
         entrypoint = ['/dlv', '--accept-multiclient', '--api-version=2', '--headless=true', '--listen', ':30000', 'exec', '--continue', '--'] + entrypoint
 
-    # Configure our image build. If the file in live_update.sync (.tiltbuild/bin/$binary) changes, Tilt
+    # Configure our image build. If the file in live_update.sync (.tiltbuild/bin/$binary_name) changes, Tilt
     # copies it to the running container and restarts it.
     docker_build_with_restart(
         # This has to match an image in the k8s_yaml we call below, so Tilt knows to use this image for our Deployment,
         # instead of the actual image specified in the yaml.
-        ref='{image}:{binary}'.format(image=image, binary=binary),
+        ref='{image}:{binary_name}'.format(image=image, binary_name=binary_name),
         # This is the `docker build` context, and because we're only copying in the binary we've already had Tilt build
         # locally, we set the context to the directory containing the binary.
-        context='../{}/.tiltbuild/bin'.format(repo),
-        # We use a slimmed-down Dockerfile that only has $binary in it.
+        context='../{repo_root}/.tiltbuild/bin'.format(repo_root=repo_root),
+        # We use a slimmed-down Dockerfile that only has the binary in it.
         dockerfile_contents='''
 FROM gcr.io/distroless/static:debug
 WORKDIR /
 COPY --from=helper /go/bin/dlv /
 COPY {} /
-        '''.format(binary),
+        '''.format(binary_name),
         # The set of files Tilt should include in the build. In this case, it's just the binary we built above.
-        only=binary,
-        # If .tiltbuild/bin/$binary changes, Tilt will copy it into the running container and restart the process.
+        only=binary_name,
+        # If .tiltbuild/bin/$binary_name changes, Tilt will copy it into the running container and restart the process.
         live_update=[
-            sync('.tiltbuild/bin/{}'.format(binary), '/{}'.format(binary)),
+            sync('../{repo_root}/.tiltbuild/bin/{binary_name}'.format(repo_root=repo_root, binary_name=binary_name), '/{}'.format(binary_name)),
         ],
+        restart_file="/.tilt_restart_proc",
         # The command to run in the container.
         entrypoint=entrypoint,
     )
@@ -103,7 +107,7 @@ def process_yaml(yaml):
 
         # If multiple Deployment manifests all use the same image but use different entrypoints to change the binary,
         # we have to adjust each Deployment to use a different image. Tilt needs each Deployment's image to be
-        # unique. We replace the tag with what is effectively :$binary, e.g. :helm.
+        # unique. We replace the tag with what is effectively :$binary_name.
         for c in o['spec']['template']['spec']['containers']:
             if c['name'] == 'kube-rbac-proxy':
                 continue
@@ -115,36 +119,61 @@ def process_yaml(yaml):
                 command = command.removeprefix('/')
 
             image_without_tag = c['image'].rsplit(':', 1)[0]
-
-            # Update the image so instead of :$tag it's :$binary
+            # Update the image so instead of :$tag it's :$binary_name
             c['image'] = '{}:{}'.format(image_without_tag, command)
 
-    # Now apply all the yaml
-    # We are using allow_duplicates=True here as both
-    # operator-controller and catalogd will be installed in the same
-    # namespace "olmv1-system" as of https://github.com/operator-framework/operator-controller/pull/888
-    # and https://github.com/operator-framework/catalogd/pull/283
+    # Now apply all the yaml.
+    # We are using allow_duplicates=True here as both operator-controller and catalogd share the
+    # olmv1-system namespace.
     k8s_yaml(encode_yaml_stream(objects), allow_duplicates=True)
 
 
 # data format:
 # {
-#     'image': 'quay.io/operator-framework/rukpak',
-#     'yaml': 'manifests/overlays/cert-manager',
-#     'binaries': {
-#         'core': 'core',
-#         'crdvalidator': 'crd-validation-webhook',
-#         'helm': 'helm-provisioner',
-#         'webhooks': 'rukpak-webhooks',
+#     'repos': {
+#         'repo-name': {
+#             'image': 'quay.io/operator-framework/repo-name',
+#             'binary': './cmd/repo-name',
+#             'deployment': 'repo-name-controller-manager',
+#             'deps': ['api', 'cmd/repo-name', 'internal/repo-name', 'go.mod', 'go.sum'],
+#             'starting_debug_port': 20000,
+#         },
 #     },
-# },
-def deploy_repo(repo, data, tags="", debug=True):
-    print('Deploying repo {}'.format(repo))
+#     'yaml': 'helm/tilt.yaml',
+# }
+def deploy_repo(repo_root, data, tags="", debug=True):
     deploy_cert_manager_if_needed()
+    for reponame, repo in data['repos'].items():
+        print('Deploying repo {}'.format(reponame))
+        local_port = repo['starting_debug_port']
+        build_binary(repo_root, reponame, repo['binary'], repo['deps'], repo['image'], tags, debug)
+        k8s_resource(repo['deployment'], port_forwards=['{}:30000'.format(local_port)])
+    process_yaml(helm('../{}/helm/olmv1'.format(repo_root), name="olmv1", values=['../{}/{}'.format(repo_root, data['yaml'])]))
 
-    local_port = data['starting_debug_port']
-    for binary, deployment in data['binaries'].items():
-        build_binary(repo, binary, data['image'], tags, debug)
-        k8s_resource(deployment, port_forwards=['{}:30000'.format(local_port)])
-        local_port += 1
-    process_yaml(kustomize('../{}/{}'.format(repo, data['yaml'])))
+
+# --- operator-controller (monorepo: includes catalogd) ---
+
+if not os.path.exists('../operator-controller'):
+    fail('Please clone https://github.com/operator-framework/operator-controller to ../operator-controller')
+
+olmv1 = {
+    'repos': {
+        'catalogd': {
+            'image': 'quay.io/operator-framework/catalogd',
+            'binary': './cmd/catalogd',
+            'deployment': 'catalogd-controller-manager',
+            'deps': ['api', 'cmd/catalogd', 'internal/catalogd', 'internal/shared', 'go.mod', 'go.sum'],
+            'starting_debug_port': 20000,
+        },
+        'operator-controller': {
+            'image': 'quay.io/operator-framework/operator-controller',
+            'binary': './cmd/operator-controller',
+            'deployment': 'operator-controller-controller-manager',
+            'deps': ['api', 'cmd/operator-controller', 'internal/operator-controller', 'internal/shared', 'go.mod', 'go.sum'],
+            'starting_debug_port': 30000,
+        },
+    },
+    'yaml': 'helm/tilt.yaml',
+}
+
+deploy_repo('operator-controller', olmv1, '-tags containers_image_openpgp')
